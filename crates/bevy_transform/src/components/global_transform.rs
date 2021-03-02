@@ -15,9 +15,9 @@ impl GlobalTransform {
     #[inline]
     pub fn identity() -> Self {
         GlobalTransform {
-            translation: Vec3::zero(),
-            rotation: Quat::identity(),
-            scale: Vec3::one(),
+            translation: Vec3::ZERO,
+            rotation: Quat::IDENTITY,
+            scale: Vec3::ONE,
         }
     }
 
@@ -70,7 +70,7 @@ impl GlobalTransform {
 
     #[inline]
     pub fn forward(&self) -> Vec3 {
-        self.rotation * Vec3::unit_z()
+        self.rotation * Vec3::Z
     }
 
     #[inline]

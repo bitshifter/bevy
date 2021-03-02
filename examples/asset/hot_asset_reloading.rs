@@ -32,7 +32,7 @@ fn setup(commands: &mut Commands, asset_server: Res<AssetServer>) {
         // camera
         .spawn(Camera3dBundle {
             transform: Transform::from_translation(Vec3::new(2.0, 2.0, 6.0))
-                .looking_at(Vec3::default(), Vec3::unit_y()),
+                .looking_at(Vec3::default(), Vec3::Y),
             ..Default::default()
         });
 }

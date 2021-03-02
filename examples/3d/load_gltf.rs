@@ -17,7 +17,7 @@ fn setup(commands: &mut Commands, asset_server: Res<AssetServer>) {
         })
         .spawn(Camera3dBundle {
             transform: Transform::from_translation(Vec3::new(0.7, 0.7, 1.0))
-                .looking_at(Vec3::new(0.0, 0.3, 0.0), Vec3::unit_y()),
+                .looking_at(Vec3::new(0.0, 0.3, 0.0), Vec3::Y),
             ..Default::default()
         });
 }

@@ -194,7 +194,7 @@ fn setup_pipeline(
         // main camera
         .spawn(Camera3dBundle {
             transform: Transform::from_translation(Vec3::new(0.0, 0.0, 6.0))
-                .looking_at(Vec3::default(), Vec3::unit_y()),
+                .looking_at(Vec3::default(), Vec3::Y),
             ..Default::default()
         })
         // second window camera
@@ -205,7 +205,7 @@ fn setup_pipeline(
                 ..Default::default()
             },
             transform: Transform::from_translation(Vec3::new(6.0, 0.0, 0.0))
-                .looking_at(Vec3::default(), Vec3::unit_y()),
+                .looking_at(Vec3::default(), Vec3::Y),
             ..Default::default()
         });
 }
