@@ -1,6 +1,8 @@
 use crate::{
     pipeline::{BindGroupDescriptorId, PipelineDescriptor, PipelineLayout},
-    renderer::{BindGroup, BufferId, BufferInfo, RenderResourceId, SamplerId, TextureId},
+    renderer::{
+        BindGroup, BufferId, BufferInfo, BufferMapMode, RenderResourceId, SamplerId, TextureId,
+    },
     shader::{Shader, ShaderError, ShaderLayout, ShaderStages},
     texture::{SamplerDescriptor, TextureDescriptor},
 };
@@ -24,7 +26,13 @@ pub trait RenderResourceContext: Downcast + Send + Sync + 'static {
         range: Range<u64>,
         write: &mut dyn FnMut(&mut [u8], &dyn RenderResourceContext),
     );
-    fn map_buffer(&self, id: BufferId);
+    fn read_mapped_buffer(
+        &self,
+        id: BufferId,
+        range: Range<u64>,
+        read: &dyn Fn(&[u8], &dyn RenderResourceContext),
+    );
+    fn map_buffer(&self, id: BufferId, mode: BufferMapMode);
     fn unmap_buffer(&self, id: BufferId);
     fn create_buffer_with_data(&self, buffer_info: BufferInfo, data: &[u8]) -> BufferId;
     fn create_shader_module(&self, shader_handle: &Handle<Shader>, shaders: &Assets<Shader>);
@@ -69,13 +77,16 @@ pub trait RenderResourceContext: Downcast + Send + Sync + 'static {
     fn remove_stale_bind_groups(&self);
     /// Reflects the pipeline layout from its shaders.
     ///
-    /// If `bevy_conventions` is true, it will be assumed that the shader follows "bevy shader conventions". These allow
-    /// richer reflection, such as inferred Vertex Buffer names and inferred instancing.
+    /// If `bevy_conventions` is true, it will be assumed that the shader follows "bevy shader
+    /// conventions". These allow richer reflection, such as inferred Vertex Buffer names and
+    /// inferred instancing.
     ///
-    /// If `dynamic_bindings` has values, shader uniforms will be set to "dynamic" if there is a matching binding in the list
+    /// If `dynamic_bindings` has values, shader uniforms will be set to "dynamic" if there is a
+    /// matching binding in the list
     ///
     /// If `vertex_buffer_descriptors` is set, the pipeline's vertex buffers
-    /// will inherit their layouts from global descriptors, otherwise the layout will be assumed to be complete / local.
+    /// will inherit their layouts from global descriptors, otherwise the layout will be assumed to
+    /// be complete / local.
     fn reflect_pipeline_layout(
         &self,
         shaders: &Assets<Shader>,

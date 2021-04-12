@@ -32,9 +32,9 @@ impl Default for EventTriggerState {
 fn event_trigger_system(
     time: Res<Time>,
     mut state: ResMut<EventTriggerState>,
-    mut my_events: ResMut<Events<MyEvent>>,
+    mut my_events: EventWriter<MyEvent>,
 ) {
-    if state.event_timer.tick(time.delta_seconds()).finished() {
+    if state.event_timer.tick(time.delta()).finished() {
         my_events.send(MyEvent {
             message: "MyEvent just happened!".to_string(),
         });
@@ -42,11 +42,8 @@ fn event_trigger_system(
 }
 
 // prints events as they come in
-fn event_listener_system(
-    mut my_event_reader: Local<EventReader<MyEvent>>,
-    my_events: Res<Events<MyEvent>>,
-) {
-    for my_event in my_event_reader.iter(&my_events) {
+fn event_listener_system(mut events: EventReader<MyEvent>) {
+    for my_event in events.iter() {
         println!("{}", my_event.message);
     }
 }

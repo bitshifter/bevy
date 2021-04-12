@@ -3,7 +3,10 @@ use crate::{
     RefChangeChannel,
 };
 use anyhow::Result;
-use bevy_ecs::{Res, ResMut, Resource};
+use bevy_ecs::{
+    component::Component,
+    system::{Res, ResMut},
+};
 use bevy_reflect::{TypeUuid, TypeUuidDynamic};
 use bevy_utils::{BoxedFuture, HashMap};
 use crossbeam_channel::{Receiver, Sender};
@@ -29,15 +32,15 @@ impl<T> Asset for T where T: TypeUuid + AssetDynamic + TypeUuidDynamic {}
 
 impl<T> AssetDynamic for T where T: Send + Sync + 'static + TypeUuidDynamic {}
 
-pub struct LoadedAsset {
-    pub(crate) value: Option<Box<dyn AssetDynamic>>,
+pub struct LoadedAsset<T: Asset> {
+    pub(crate) value: Option<T>,
     pub(crate) dependencies: Vec<AssetPath<'static>>,
 }
 
-impl LoadedAsset {
-    pub fn new<T: Asset>(value: T) -> Self {
+impl<T: Asset> LoadedAsset<T> {
+    pub fn new(value: T) -> Self {
         Self {
-            value: Some(Box::new(value)),
+            value: Some(value),
             dependencies: Vec::new(),
         }
     }
@@ -53,10 +56,26 @@ impl LoadedAsset {
     }
 }
 
+pub(crate) struct BoxedLoadedAsset {
+    pub(crate) value: Option<Box<dyn AssetDynamic>>,
+    pub(crate) dependencies: Vec<AssetPath<'static>>,
+}
+
+impl<T: Asset> From<LoadedAsset<T>> for BoxedLoadedAsset {
+    fn from(asset: LoadedAsset<T>) -> Self {
+        BoxedLoadedAsset {
+            value: asset
+                .value
+                .map(|value| Box::new(value) as Box<dyn AssetDynamic>),
+            dependencies: asset.dependencies,
+        }
+    }
+}
+
 pub struct LoadContext<'a> {
     pub(crate) ref_change_channel: &'a RefChangeChannel,
     pub(crate) asset_io: &'a dyn AssetIo,
-    pub(crate) labeled_assets: HashMap<Option<String>, LoadedAsset>,
+    pub(crate) labeled_assets: HashMap<Option<String>, BoxedLoadedAsset>,
     pub(crate) path: &'a Path,
     pub(crate) version: usize,
 }
@@ -85,13 +104,15 @@ impl<'a> LoadContext<'a> {
         self.labeled_assets.contains_key(&Some(label.to_string()))
     }
 
-    pub fn set_default_asset(&mut self, asset: LoadedAsset) {
-        self.labeled_assets.insert(None, asset);
+    pub fn set_default_asset<T: Asset>(&mut self, asset: LoadedAsset<T>) {
+        self.labeled_assets.insert(None, asset.into());
     }
 
-    pub fn set_labeled_asset(&mut self, label: &str, asset: LoadedAsset) {
+    pub fn set_labeled_asset<T: Asset>(&mut self, label: &str, asset: LoadedAsset<T>) -> Handle<T> {
         assert!(!label.is_empty());
-        self.labeled_assets.insert(Some(label.to_string()), asset);
+        self.labeled_assets
+            .insert(Some(label.to_string()), asset.into());
+        self.get_handle(AssetPath::new_ref(self.path(), Some(label)))
     }
 
     pub fn get_handle<I: Into<HandleId>, T: Asset>(&self, id: I) -> Handle<T> {
@@ -117,7 +138,7 @@ impl<'a> LoadContext<'a> {
 
 /// The result of loading an asset of type `T`
 #[derive(Debug)]
-pub struct AssetResult<T: Resource> {
+pub struct AssetResult<T: Component> {
     pub asset: T,
     pub id: HandleId,
     pub version: usize,
@@ -125,12 +146,12 @@ pub struct AssetResult<T: Resource> {
 
 /// A channel to send and receive [AssetResult]s
 #[derive(Debug)]
-pub struct AssetLifecycleChannel<T: Resource> {
+pub struct AssetLifecycleChannel<T: Component> {
     pub sender: Sender<AssetLifecycleEvent<T>>,
     pub receiver: Receiver<AssetLifecycleEvent<T>>,
 }
 
-pub enum AssetLifecycleEvent<T: Resource> {
+pub enum AssetLifecycleEvent<T: Component> {
     Create(AssetResult<T>),
     Free(HandleId),
 }
@@ -164,7 +185,7 @@ impl<T: AssetDynamic> AssetLifecycle for AssetLifecycleChannel<T> {
     }
 }
 
-impl<T: Resource> Default for AssetLifecycleChannel<T> {
+impl<T: Component> Default for AssetLifecycleChannel<T> {
     fn default() -> Self {
         let (sender, receiver) = crossbeam_channel::unbounded();
         AssetLifecycleChannel { sender, receiver }

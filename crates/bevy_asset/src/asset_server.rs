@@ -5,7 +5,8 @@ use crate::{
     RefChange, RefChangeChannel, SourceInfo, SourceMeta,
 };
 use anyhow::Result;
-use bevy_ecs::Res;
+use bevy_ecs::system::Res;
+use bevy_log::warn;
 use bevy_tasks::TaskPool;
 use bevy_utils::{HashMap, Uuid};
 use crossbeam_channel::TryRecvError;
@@ -16,16 +17,28 @@ use thiserror::Error;
 /// Errors that occur while loading assets with an AssetServer
 #[derive(Error, Debug)]
 pub enum AssetServerError {
-    #[error("asset folder path is not a directory")]
+    #[error("asset folder path is not a directory: {0}")]
     AssetFolderNotADirectory(String),
-    #[error("no AssetLoader found for the given extension")]
-    MissingAssetLoader(Option<String>),
+    #[error("no `AssetLoader` found{}", format_missing_asset_ext(.extensions))]
+    MissingAssetLoader { extensions: Vec<String> },
     #[error("the given type does not match the type of the loaded asset")]
     IncorrectHandleType,
-    #[error("encountered an error while loading an asset")]
+    #[error("encountered an error while loading an asset: {0}")]
     AssetLoaderError(anyhow::Error),
-    #[error("`PathLoader` encountered an error")]
-    PathLoaderError(#[from] AssetIoError),
+    #[error("encountered an error while reading an asset: {0}")]
+    AssetIoError(#[from] AssetIoError),
+}
+
+fn format_missing_asset_ext(exts: &[String]) -> String {
+    if !exts.is_empty() {
+        format!(
+            " for the following extension{}: {}",
+            if exts.len() > 1 { "s" } else { "" },
+            exts.join(", ")
+        )
+    } else {
+        String::new()
+    }
 }
 
 #[derive(Default)]
@@ -125,18 +138,39 @@ impl AssetServer {
             .read()
             .get(extension)
             .map(|index| self.server.loaders.read()[*index].clone())
-            .ok_or_else(|| AssetServerError::MissingAssetLoader(Some(extension.to_string())))
+            .ok_or_else(|| AssetServerError::MissingAssetLoader {
+                extensions: vec![extension.to_string()],
+            })
     }
 
     fn get_path_asset_loader<P: AsRef<Path>>(
         &self,
         path: P,
     ) -> Result<Arc<Box<dyn AssetLoader>>, AssetServerError> {
-        path.as_ref()
-            .extension()
-            .and_then(|e| e.to_str())
-            .ok_or(AssetServerError::MissingAssetLoader(None))
-            .and_then(|extension| self.get_asset_loader(extension))
+        let s = path
+            .as_ref()
+            .file_name()
+            .ok_or(AssetServerError::MissingAssetLoader {
+                extensions: Vec::new(),
+            })?
+            .to_str()
+            .map(|s| s.to_lowercase())
+            .ok_or(AssetServerError::MissingAssetLoader {
+                extensions: Vec::new(),
+            })?;
+
+        let mut exts = Vec::new();
+        let mut ext = s.as_str();
+        while let Some(idx) = ext.find('.') {
+            ext = &ext[idx + 1..];
+            exts.push(ext);
+            if let Ok(loader) = self.get_asset_loader(ext) {
+                return Ok(loader);
+            }
+        }
+        Err(AssetServerError::MissingAssetLoader {
+            extensions: exts.into_iter().map(String::from).collect(),
+        })
     }
 
     pub fn get_handle_path<H: Into<HandleId>>(&self, handle: H) -> Option<AssetPath<'_>> {
@@ -192,7 +226,8 @@ impl AssetServer {
         let asset_loader = self.get_path_asset_loader(asset_path.path())?;
         let asset_path_id: AssetPathId = asset_path.get_id();
 
-        // load metadata and update source info. this is done in a scope to ensure we release the locks before loading
+        // load metadata and update source info. this is done in a scope to ensure we release the
+        // locks before loading
         let version = {
             let mut asset_sources = self.server.asset_sources.write();
             let source_info = match asset_sources.entry(asset_path_id.source_path_id()) {
@@ -224,7 +259,17 @@ impl AssetServer {
         };
 
         // load the asset bytes
-        let bytes = self.server.asset_io.load_path(asset_path.path()).await?;
+        let bytes = match self.server.asset_io.load_path(asset_path.path()).await {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                let mut asset_sources = self.server.asset_sources.write();
+                let source_info = asset_sources
+                    .get_mut(&asset_path_id.source_path_id())
+                    .expect("`AssetSource` should exist at this point.");
+                source_info.load_state = LoadState::Failed;
+                return Err(AssetServerError::AssetIoError(err));
+            }
+        };
 
         // load the asset source using the corresponding AssetLoader
         let mut load_context = LoadContext::new(
@@ -238,7 +283,8 @@ impl AssetServer {
             .await
             .map_err(AssetServerError::AssetLoaderError)?;
 
-        // if version has changed since we loaded and grabbed a lock, return. theres is a newer version being loaded
+        // if version has changed since we loaded and grabbed a lock, return. theres is a newer
+        // version being loaded
         let mut asset_sources = self.server.asset_sources.write();
         let source_info = asset_sources
             .get_mut(&asset_path_id.source_path_id())
@@ -295,7 +341,9 @@ impl AssetServer {
         self.server
             .task_pool
             .spawn(async move {
-                server.load_async(owned_path, force).await.unwrap();
+                if let Err(err) = server.load_async(owned_path, force).await {
+                    warn!("{}", err);
+                }
             })
             .detach();
         asset_path.into()
@@ -387,7 +435,13 @@ impl AssetServer {
                     AssetPath::new_ref(&load_context.path, label.as_ref().map(|l| l.as_str()));
                 asset_lifecycle.create_asset(asset_path.into(), asset_value, load_context.version);
             } else {
-                panic!("Failed to find AssetLifecycle for label {:?}, which has an asset type {:?}. Are you sure that is a registered asset type?", label, asset_value.type_uuid());
+                panic!(
+                    "Failed to find AssetLifecycle for label '{:?}', which has an asset type {} (UUID {:?}). \
+                        Are you sure this asset type has been added to your app builder?",
+                    label,
+                    asset_value.type_name(),
+                    asset_value.type_uuid(),
+                );
             }
         }
     }
@@ -417,7 +471,7 @@ impl AssetServer {
                         }
                     }
 
-                    assets.set(result.id, result.asset);
+                    let _ = assets.set(result.id, result.asset);
                 }
                 Ok(AssetLifecycleEvent::Free(handle_id)) => {
                     if let HandleId::AssetPathId(id) = handle_id {
@@ -443,4 +497,130 @@ impl AssetServer {
 
 pub fn free_unused_assets_system(asset_server: Res<AssetServer>) {
     asset_server.free_unused_assets();
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use bevy_utils::BoxedFuture;
+
+    struct FakePngLoader;
+    impl AssetLoader for FakePngLoader {
+        fn load<'a>(
+            &'a self,
+            _: &'a [u8],
+            _: &'a mut LoadContext,
+        ) -> BoxedFuture<'a, Result<(), anyhow::Error>> {
+            Box::pin(async move { Ok(()) })
+        }
+
+        fn extensions(&self) -> &[&str] {
+            &["png"]
+        }
+    }
+
+    struct FakeMultipleDotLoader;
+    impl AssetLoader for FakeMultipleDotLoader {
+        fn load<'a>(
+            &'a self,
+            _: &'a [u8],
+            _: &'a mut LoadContext,
+        ) -> BoxedFuture<'a, Result<(), anyhow::Error>> {
+            Box::pin(async move { Ok(()) })
+        }
+
+        fn extensions(&self) -> &[&str] {
+            &["test.png"]
+        }
+    }
+
+    fn setup() -> AssetServer {
+        use crate::FileAssetIo;
+
+        let asset_server = AssetServer {
+            server: Arc::new(AssetServerInternal {
+                loaders: Default::default(),
+                extension_to_loader_index: Default::default(),
+                asset_sources: Default::default(),
+                asset_ref_counter: Default::default(),
+                handle_to_path: Default::default(),
+                asset_lifecycles: Default::default(),
+                task_pool: Default::default(),
+                asset_io: Box::new(FileAssetIo::new(&".")),
+            }),
+        };
+        asset_server.add_loader::<FakePngLoader>(FakePngLoader);
+        asset_server.add_loader::<FakeMultipleDotLoader>(FakeMultipleDotLoader);
+        asset_server
+    }
+
+    #[test]
+    fn extensions() {
+        let asset_server = setup();
+        let t = asset_server.get_path_asset_loader("test.png");
+        assert_eq!(t.unwrap().extensions()[0], "png");
+    }
+
+    #[test]
+    fn case_insensitive_extensions() {
+        let asset_server = setup();
+        let t = asset_server.get_path_asset_loader("test.PNG");
+        assert_eq!(t.unwrap().extensions()[0], "png");
+    }
+
+    #[test]
+    fn no_loader() {
+        let asset_server = setup();
+        let t = asset_server.get_path_asset_loader("test.pong");
+        assert!(t.is_err());
+    }
+
+    #[test]
+    fn multiple_extensions_no_loader() {
+        let asset_server = setup();
+
+        assert!(
+            match asset_server.get_path_asset_loader("test.v1.2.3.pong") {
+                Err(AssetServerError::MissingAssetLoader { extensions }) =>
+                    extensions == vec!["v1.2.3.pong", "2.3.pong", "3.pong", "pong"],
+                _ => false,
+            }
+        )
+    }
+
+    #[test]
+    fn missing_asset_loader_error_messages() {
+        assert_eq!(
+            AssetServerError::MissingAssetLoader { extensions: vec![] }.to_string(),
+            "no `AssetLoader` found"
+        );
+        assert_eq!(
+            AssetServerError::MissingAssetLoader {
+                extensions: vec!["png".into()]
+            }
+            .to_string(),
+            "no `AssetLoader` found for the following extension: png"
+        );
+        assert_eq!(
+            AssetServerError::MissingAssetLoader {
+                extensions: vec!["1.2.png".into(), "2.png".into(), "png".into()]
+            }
+            .to_string(),
+            "no `AssetLoader` found for the following extensions: 1.2.png, 2.png, png"
+        );
+    }
+
+    #[test]
+    fn filename_with_dots() {
+        let asset_server = setup();
+        let t = asset_server.get_path_asset_loader("test-v1.2.3.png");
+        assert_eq!(t.unwrap().extensions()[0], "png");
+    }
+
+    #[test]
+    fn multiple_extensions() {
+        let asset_server = setup();
+        let t = asset_server.get_path_asset_loader("test.test.png");
+        assert_eq!(t.unwrap().extensions()[0], "test.png");
+    }
 }

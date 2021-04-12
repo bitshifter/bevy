@@ -66,8 +66,9 @@ impl WgpuRenderContext {
         }
     }
 
-    /// Consume this context, finalize the current CommandEncoder (if it exists), and take the current WgpuResources.
-    /// This is intended to be called from a worker thread right before synchronizing with the main thread.   
+    /// Consume this context, finalize the current CommandEncoder (if it exists), and take the
+    /// current WgpuResources. This is intended to be called from a worker thread right before
+    /// synchronizing with the main thread.
     pub fn finish(&mut self) -> Option<wgpu::CommandBuffer> {
         self.command_encoder.take().map(|encoder| encoder.finish())
     }
@@ -114,6 +115,50 @@ impl RenderContext for WgpuRenderContext {
         )
     }
 
+    fn copy_texture_to_buffer(
+        &mut self,
+        source_texture: TextureId,
+        source_origin: [u32; 3],
+        source_mip_level: u32,
+        destination_buffer: BufferId,
+        destination_offset: u64,
+        destination_bytes_per_row: u32,
+        size: Extent3d,
+    ) {
+        self.render_resource_context.copy_texture_to_buffer(
+            self.command_encoder.get_or_create(&self.device),
+            source_texture,
+            source_origin,
+            source_mip_level,
+            destination_buffer,
+            destination_offset,
+            destination_bytes_per_row,
+            size,
+        )
+    }
+
+    fn copy_texture_to_texture(
+        &mut self,
+        source_texture: TextureId,
+        source_origin: [u32; 3],
+        source_mip_level: u32,
+        destination_texture: TextureId,
+        destination_origin: [u32; 3],
+        destination_mip_level: u32,
+        size: Extent3d,
+    ) {
+        self.render_resource_context.copy_texture_to_texture(
+            self.command_encoder.get_or_create(&self.device),
+            source_texture,
+            source_origin,
+            source_mip_level,
+            destination_texture,
+            destination_origin,
+            destination_mip_level,
+            size,
+        )
+    }
+
     fn resources(&self) -> &dyn RenderResourceContext {
         &self.render_resource_context
     }
@@ -126,7 +171,7 @@ impl RenderContext for WgpuRenderContext {
         &mut self,
         pass_descriptor: &PassDescriptor,
         render_resource_bindings: &RenderResourceBindings,
-        run_pass: &mut dyn Fn(&mut dyn RenderPass),
+        run_pass: &mut dyn FnMut(&mut dyn RenderPass),
     ) {
         if !self.command_encoder.is_some() {
             self.command_encoder.create(&self.device);
@@ -162,6 +207,7 @@ pub fn create_render_pass<'a, 'b>(
     encoder: &'a mut wgpu::CommandEncoder,
 ) -> wgpu::RenderPass<'a> {
     encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: None,
         color_attachments: &pass_descriptor
             .color_attachments
             .iter()

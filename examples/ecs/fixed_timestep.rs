@@ -5,6 +5,9 @@ use bevy::{
 
 const LABEL: &str = "my_fixed_timestep";
 
+#[derive(Debug, Hash, PartialEq, Eq, Clone, StageLabel)]
+struct FixedUpdateStage;
+
 fn main() {
     App::build()
         .add_plugins(DefaultPlugins)
@@ -12,12 +15,13 @@ fn main() {
         .add_system(update.system())
         // add a new stage that runs every two seconds
         .add_stage_after(
-            stage::UPDATE,
-            "fixed_update",
+            CoreStage::Update,
+            FixedUpdateStage,
             SystemStage::parallel()
                 .with_run_criteria(
                     FixedTimestep::step(2.0)
-                        // labels are optional. they provide a way to access the current FixedTimestep state from within a system
+                        // labels are optional. they provide a way to access the current
+                        // FixedTimestep state from within a system
                         .with_label(LABEL),
                 )
                 .with_system(fixed_update.system()),

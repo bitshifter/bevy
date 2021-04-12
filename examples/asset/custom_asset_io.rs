@@ -50,8 +50,8 @@ impl Plugin for CustomAssetIoPlugin {
         // must get a hold of the task pool in order to create the asset server
 
         let task_pool = app
-            .resources()
-            .get::<bevy::tasks::IoTaskPool>()
+            .world()
+            .get_resource::<bevy::tasks::IoTaskPool>()
             .expect("`IoTaskPool` resource not found.")
             .0
             .clone();
@@ -69,7 +69,7 @@ impl Plugin for CustomAssetIoPlugin {
 
         // the asset server is constructed and added the resource manager
 
-        app.add_resource(AssetServer::new(asset_io, task_pool));
+        app.insert_resource(AssetServer::new(asset_io, task_pool));
     }
 }
 
@@ -90,15 +90,14 @@ fn main() {
 }
 
 fn setup(
-    commands: &mut Commands,
+    mut commands: Commands,
     asset_server: Res<AssetServer>,
     mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
     let texture_handle = asset_server.load("branding/icon.png");
-    commands
-        .spawn(Camera2dBundle::default())
-        .spawn(SpriteBundle {
-            material: materials.add(texture_handle.into()),
-            ..Default::default()
-        });
+    commands.spawn_bundle(OrthographicCameraBundle::new_2d());
+    commands.spawn_bundle(SpriteBundle {
+        material: materials.add(texture_handle.into()),
+        ..Default::default()
+    });
 }
